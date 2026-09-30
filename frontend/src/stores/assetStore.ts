@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { newId } from '../utils/id';
-import { makeThumbDataUrl, type AssetThumb, type ImageAsset, type ImageAssetDraft, type ImageQuality } from '../types/imageasset';
+import { makeThumbDataUrl, snapshotFromMission, type AssetThumb, type ImageAsset, type ImageAssetDraft, type ImageQuality } from '../types/imageasset';
 
 interface AssetState {
   items: ImageAsset[];
@@ -31,7 +31,20 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     set({ items: rows, thumbs, loaded: true });
   },
   async addMany(drafts) {
-    const records: ImageAsset[] = drafts.map((d) => ({ ...d, id: newId('asset') }));
+    // 为缺快照的新条目补录收测快照（相机参数仅溯源，不参与实测值回算）
+    const missionIds = Array.from(new Set(drafts.map((d) => d.missionId)));
+    const missionSnapshots = new Map<string, ImageAsset['snapshot']>();
+    await Promise.all(
+      missionIds.map(async (mid) => {
+        const mission = await db.missions.get(mid);
+        if (mission) missionSnapshots.set(mid, snapshotFromMission(mission, 'collection'));
+      }),
+    );
+    const records: ImageAsset[] = drafts.map((d) => ({
+      ...d,
+      id: newId('asset'),
+      snapshot: d.snapshot ?? missionSnapshots.get(d.missionId),
+    }));
     const thumbRecords: AssetThumb[] = records.map((r) => ({
       id: r.id,
       missionId: r.missionId,

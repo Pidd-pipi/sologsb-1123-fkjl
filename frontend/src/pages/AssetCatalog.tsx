@@ -13,11 +13,12 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { DownloadOutlined, PlusOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useMissionStore } from '../stores/missionStore';
 import { useWaypointStore } from '../stores/waypointStore';
 import { useAssetStore } from '../stores/assetStore';
 import AssetGrid from '../components/common/AssetGrid';
+import MergeCardsModal from '../components/common/MergeCardsModal';
 import AmapRouteView from '../components/common/AmapRouteView';
 import { IMAGE_QUALITIES, type ImageAsset, type ImageAssetDraft, type ImageQuality } from '../types/imageasset';
 import { calcGsd, distanceMeters } from '../utils/geoCalc';
@@ -32,6 +33,9 @@ export default function AssetCatalog() {
   const addMany = useAssetStore((s) => s.addMany);
   const markMany = useAssetStore((s) => s.markMany);
   const removeMany = useAssetStore((s) => s.removeMany);
+  const loadAssets = useAssetStore((s) => s.load);
+
+  const [mergeOpen, setMergeOpen] = useState(false);
 
   const mission = missions.find((m) => m.id === id);
   const missionAssets = useMemo(
@@ -189,6 +193,9 @@ export default function AssetCatalog() {
           <Button type="primary" icon={<PlusOutlined />} onClick={catalogFromWaypoints}>
             按航点批量编目
           </Button>
+          <Button icon={<MergeCellsOutlined />} onClick={() => setMergeOpen(true)}>
+            两卡合并
+          </Button>
           <Button
             disabled={selected.length === 0}
             onClick={async () => {
@@ -260,6 +267,19 @@ export default function AssetCatalog() {
           </Card>
         </Col>
       </Row>
+
+      <MergeCardsModal
+        open={mergeOpen}
+        missionId={id}
+        missionNo={mission.missionNo}
+        base={missionAssets}
+        baseThumbs={thumbs}
+        onClose={() => setMergeOpen(false)}
+        onMerged={async () => {
+          await loadAssets();
+          setToast('两卡合并已写入：台账、成果页与导出看到同一结果');
+        }}
+      />
     </Space>
   );
 }

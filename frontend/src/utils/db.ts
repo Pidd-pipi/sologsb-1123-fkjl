@@ -3,10 +3,12 @@ import type { CameraPreset, Mission } from '../types/mission';
 import type { Waypoint } from '../types/waypoint';
 import type { FlightLine } from '../types/flightline';
 import { makeThumbDataUrl, type AssetThumb, type ImageAsset } from '../types/imageasset';
+import type { MergeRun } from '../types/merge';
+import { snapshotFromMission } from '../types/imageasset';
 import { newId } from './id';
 
 export const DB_NAME = 'gbdronemap';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbdronemap:db-version';
 
 class DroneMapDB extends Dexie {
@@ -16,6 +18,7 @@ class DroneMapDB extends Dexie {
   assets!: Table<ImageAsset, string>;
   thumbs!: Table<AssetThumb, string>;
   presets!: Table<CameraPreset, string>;
+  mergeRuns!: Table<MergeRun, string>;
 
   constructor() {
     super(DB_NAME);
@@ -54,6 +57,30 @@ class DroneMapDB extends Dexie {
             if (row.updatedAt === undefined) row.updatedAt = Date.now();
             if (row.batteryCount === undefined) row.batteryCount = 1;
           });
+      });
+    this.version(3)
+      .stores({
+        missions: 'id, missionNo, areaName, droneModel, flightDate, status, purpose, createdAt',
+        waypoints: 'id, missionId, seq, action, altitude',
+        lines: 'id, missionId, lineNo, updatedAt',
+        assets: 'id, missionId, imageNo, quality, shotAt',
+        thumbs: 'id, missionId',
+        presets: 'id, name, cameraModel',
+        mergeRuns: 'id, missionId, status, createdAt',
+      })
+      .upgrade(async (tx) => {
+        // 旧数据升级：为成果条目补录收测快照（仅溯源），绝不回算已收实测 gsd / overlap
+        const missions = await tx.table('missions').toArray();
+        for (const mission of missions) {
+          const snapshot = snapshotFromMission(mission, 'legacy');
+          await tx
+            .table('assets')
+            .where('missionId')
+            .equals(mission.id)
+            .modify((row: ImageAsset) => {
+              if (!row.snapshot) row.snapshot = snapshot;
+            });
+        }
       });
   }
 }
@@ -236,6 +263,7 @@ export async function ensureSeedData(): Promise<void> {
   const assets: ImageAsset[] = [];
   const thumbs: AssetThumb[] = [];
   const qualities: ImageAsset['quality'][] = ['合格', '合格', '模糊', '合格', '过曝', '合格'];
+  const seedSnapshot = snapshotFromMission(missions[0], 'collection');
   qualities.forEach((quality, index) => {
     const id = newId('asset');
     const lng = 116.3916 + index * 0.0012;
@@ -253,6 +281,7 @@ export async function ensureSeedData(): Promise<void> {
       shotAt: now - 30 * day + index * 12000,
       quality,
       folder: `/DM-2024-018/100MEDIA`,
+      snapshot: seedSnapshot,
     });
     thumbs.push({ id, missionId: missionA, dataUrl: makeThumbDataUrl(`IMG_${1001 + index}`, quality, lng, lat) });
   });

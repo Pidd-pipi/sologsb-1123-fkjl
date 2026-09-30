@@ -67,12 +67,12 @@ sologsb-1123/
         ├── index.css
         ├── vite-env.d.ts
         ├── router/index.tsx
-        ├── types/{mission,waypoint,flightline,imageasset}.ts
-        ├── stores/{mission,waypoint,asset}Store.ts
-        ├── components/common/{AmapRouteView,OverlapCalcPanel,AssetGrid,MissionCard}.tsx
+        ├── types/{mission,waypoint,flightline,imageasset,merge}.ts
+        ├── stores/{mission,waypoint,asset,merge}Store.ts
+        ├── components/common/{AmapRouteView,OverlapCalcPanel,AssetGrid,MissionCard,MergeCardsModal}.tsx
         ├── hooks/{useMissionFilter,useRouteMetrics}.ts
         ├── pages/{MissionList,RoutePlanner,WaypointTable,AssetCatalog,CameraPreset}.tsx
-        └── utils/{db,geoCalc,amapLoader,id}.ts
+        └── utils/{db,geoCalc,amapLoader,id,assetMerge}.ts
 ```
 
 ## 页面与路由
@@ -95,10 +95,23 @@ sologsb-1123/
 - **预计张数** = Σ(每条航带长度 / 拍照间隔 + 1)；**预计耗时** = (总航程 / 航速 + 转弯与悬停附加) / 60；**电池组数** 按 20 min 有效续航向上取整
 - **测区面积**：经纬度投影到米制后用鞋带公式；**航带路径长度**：逐段球面近似距离累加
 
+## 两卡合并（成果编目页）
+
+外业两张卡会把同一航拍任务的成果影像带回，内业合并时按以下规则接住两张卡清单（成果编目页「两卡合并」按钮，支持粘贴 / 导入 JSON 或 CSV，也可「载入示例卡片」演示）：
+
+- **认片身份**：按 `任务编号(missionNo) + 片号(imageNo)` 认作同一张；卡片里的临时编号（tempId / id）只作卡片内引用，**不当作编目身份**，落库时新条目用由业务键派生的确定性 id。
+- **空白补齐**：任一侧字段为空白即从另一侧补（编目已有值优先保留，不重复劳动）。
+- **保留项**：已确认质量、实测重叠率、实测 GSD、缩略图一旦存在即保留，不被另一张卡的不同值覆盖；缩略图断链 / 缺失时从另一张卡补，仍无则生成占位图，杜绝断链。
+- **冲突区**：两卡实测 GSD 相对差异超过容差（默认 5%）时进入冲突区，**人工选定**（编目保留 / A 卡 / B 卡）后才写入，未选不可写入。
+- **快照溯源**：每条成果带收测相机参数快照（`snapshot`）。旧数据升级（v2 → v3）时为缺快照条目补录 `legacy` 快照，**绝不**用后来改过的相机 / 航线参数回算已收实测 GSD / 重叠率。
+- **失败恢复与续作**：写入分批进行并在 `mergeRuns` 表记录批次检查点；失败后**恢复本任务原编目**，重试按 (任务编号, 片号) 幂等写入、**从未完成批次继续**，不产生重复条目。
+- 合并写入统一落到 IndexedDB 后刷新成果库，任务台账、成果编目页与导出清单看到同一结果。
+
 ## 数据存储说明
 
-- 数据库名 `gbdronemap`，当前结构版本 **v2**（`localStorage['gbdronemap:db-version']` 记录）。
-- 六张表：`missions`（任务）、`waypoints`（航点）、`lines`（航线参数）、`assets`（成果影像条目）、`thumbs`（**缩略图单独建表**，dataUrl）、`presets`（相机预设）。
+- 数据库名 `gbdronemap`，当前结构版本 **v3**（`localStorage['gbdronemap:db-version']` 记录）。
+- 七张表：`missions`（任务）、`waypoints`（航点）、`lines`（航线参数）、`assets`（成果影像条目，含 `snapshot` 快照）、`thumbs`（**缩略图单独建表**，dataUrl）、`presets`（相机预设）、`mergeRuns`（两卡合并批次运行记录，用于失败恢复与断点续作）。
 - v1 → v2 迁移：为老任务补 `areaPolygon`/传感器默认值，为航线补 `updatedAt`/`batteryCount`，并新增索引。
+- v2 → v3 迁移：新增 `mergeRuns` 表；为缺快照的成果条目补录 `legacy` 相机参数快照（仅溯源，不回算实测值）。
 - 容器无状态、不挂载命名卷；清空站点数据即回到初始示范数据。
-- 首次打开灌入 2 个示范任务、5 个航点、2 条航线参数、6 条成果影像条目（含缩略图）与 3 套相机预设。
+- 首次打开灌入 2 个示范任务、5 个航点、2 条航线参数、6 条成果影像条目（含缩略图与收测快照）与 3 套相机预设。

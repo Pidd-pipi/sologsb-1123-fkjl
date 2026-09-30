@@ -1,7 +1,23 @@
+import type { Mission } from './mission';
+
 /** 成果影像质量 */
 export type ImageQuality = '合格' | '模糊' | '过曝';
 
 export const IMAGE_QUALITIES: ImageQuality[] = ['合格', '模糊', '过曝'];
+
+/**
+ * 成果快照：收测时刻的相机参数记录，仅用于溯源。
+ * 升级补录的快照 source 为 'legacy'，不得据此改写已收实测值（gsd / overlap）。
+ */
+export interface AssetSnapshot {
+  sensorWidth: number;
+  sensorHeight: number;
+  focalLength: number;
+  pixelSize: number;
+  /** collection=收测时记录；legacy=旧数据升级补录 */
+  source: 'collection' | 'legacy';
+  at: number;
+}
 
 /** 成果影像条目 */
 export interface ImageAsset {
@@ -13,9 +29,9 @@ export interface ImageAsset {
   lat: number;
   /** 航高 m */
   altitude: number;
-  /** 实际 GSD cm/px */
+  /** 实际 GSD cm/px（实测值，合并/升级均不得用参数回算值覆盖） */
   gsd: number;
-  /** 实际重叠 % */
+  /** 实际重叠 %（实测值，合并保留） */
   overlap: number;
   /** 倾角 ° */
   tiltAngle: number;
@@ -23,9 +39,34 @@ export interface ImageAsset {
   quality: ImageQuality;
   /** 归档目录 */
   folder: string;
+  /** 收测相机参数快照（旧数据升级时补录，不参与实测值改写） */
+  snapshot?: AssetSnapshot;
 }
 
 export type ImageAssetDraft = Omit<ImageAsset, 'id'>;
+
+/** 两卡实测 GSD 相对差异容差：|a-b|/max(|a|,|b|) 超过该值进入冲突区 */
+export const MERGE_GSD_TOLERANCE = 0.05;
+
+/** 判断字段是否为空白（null/undefined/空串/NaN） */
+export function isBlank(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (typeof value === 'number') return Number.isNaN(value);
+  return false;
+}
+
+/** 用当前任务相机参数生成一份成果快照 */
+export function snapshotFromMission(mission: Mission, source: AssetSnapshot['source'], at = Date.now()): AssetSnapshot {
+  return {
+    sensorWidth: mission.sensorWidth,
+    sensorHeight: mission.sensorHeight,
+    focalLength: mission.focalLength,
+    pixelSize: mission.pixelSize,
+    source,
+    at,
+  };
+}
 
 /** 缩略图（单独建表存放 dataUrl） */
 export interface AssetThumb {
