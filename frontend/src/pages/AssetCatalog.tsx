@@ -13,13 +13,16 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { DownloadOutlined, PlusOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { useMissionStore } from '../stores/missionStore';
 import { useWaypointStore } from '../stores/waypointStore';
 import { useAssetStore } from '../stores/assetStore';
+import { useMergeStore } from '../stores/mergeStore';
 import AssetGrid from '../components/common/AssetGrid';
 import AmapRouteView from '../components/common/AmapRouteView';
+import CardMergeDrawer from '../components/common/CardMergeDrawer';
 import { IMAGE_QUALITIES, type ImageAsset, type ImageAssetDraft, type ImageQuality } from '../types/imageasset';
+import type { MergeResult } from '../types/cardMerge';
 import { calcGsd, distanceMeters } from '../utils/geoCalc';
 
 /** /missions/:id/assets 成果影像编目：格子列出片号/缩略图/GSD/质量，多选标记、定位到图 */
@@ -32,6 +35,9 @@ export default function AssetCatalog() {
   const addMany = useAssetStore((s) => s.addMany);
   const markMany = useAssetStore((s) => s.markMany);
   const removeMany = useAssetStore((s) => s.removeMany);
+  const reloadAssets = useAssetStore((s) => s.load);
+  const mergeBatches = useMergeStore((s) => s.batches);
+  const loadBatches = useMergeStore((s) => s.load);
 
   const mission = missions.find((m) => m.id === id);
   const missionAssets = useMemo(
@@ -49,6 +55,21 @@ export default function AssetCatalog() {
   const [locateSeq, setLocateSeq] = useState<number | undefined>(undefined);
   const [toast, setToast] = useState('');
   const [error, setError] = useState('');
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [resumeBatchId, setResumeBatchId] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    loadBatches();
+  }, [loadBatches]);
+
+  /** 与当前任务相关、上次失败的合并批次（原编目已恢复，可从断点继续） */
+  const failedBatches = useMemo(
+    () =>
+      mergeBatches.filter(
+        (b) => b.status === 'failed' && b.plan.some((p) => p.missionId === id),
+      ),
+    [mergeBatches, id],
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -110,9 +131,23 @@ export default function AssetCatalog() {
   };
 
   const exportList = () => {
-    const header = '片号,经度,纬度,航高m,GSDcm/px,重叠%,倾角°,质量,归档目录';
+    const header = '片号,卡片临时编号,来源卡片,经度,纬度,航高m,GSDcm/px,重叠%,倾角°,质量,质量已确认,归档目录,快照';
     const lines = missionAssets.map((a) =>
-      [a.imageNo, a.lng, a.lat, a.altitude, a.gsd, a.overlap, a.tiltAngle, a.quality, a.folder].join(','),
+      [
+        a.imageNo,
+        a.cardNo,
+        a.sourceCardNos.join('/'),
+        a.lng,
+        a.lat,
+        a.altitude,
+        a.gsd,
+        a.overlap,
+        a.tiltAngle,
+        a.quality,
+        a.qualityConfirmed ? '是' : '否',
+        a.folder,
+        a.snapshotFilled ? '已冻结' : '缺失',
+      ].join(','),
     );
     const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -122,6 +157,20 @@ export default function AssetCatalog() {
     a.click();
     URL.revokeObjectURL(url);
     setToast(`已导出 ${lines.length} 条影像清单`);
+  };
+
+  /** 两卡合并执行完：统一从同一存储层重新读取，台账/成果页/导出一致 */
+  const onMergeExecuted = async (ok: boolean, stats?: MergeResult) => {
+    await reloadAssets();
+    await loadBatches();
+    setSelected([]);
+    if (ok && stats) {
+      setToast(
+        `两卡合并完成：新增 ${stats.added} 张、并入 ${stats.merged} 张、人工解冲突 ${stats.conflictsResolved} 个、补缩略图 ${stats.thumbsRepaired} 个、空白补齐 ${stats.blankFilled} 处`,
+      );
+    } else {
+      setError('两卡合并中断，原编目已恢复；可在上方断点处继续重试');
+    }
   };
 
   if (!mission) {
@@ -156,6 +205,28 @@ export default function AssetCatalog() {
       {toast ? <Alert type="success" showIcon message={toast} closable onClose={() => setToast('')} /> : null}
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
 
+      {failedBatches.map((b) => (
+        <Alert
+          key={b.id}
+          type="error"
+          showIcon
+          message={`两卡合并批次未完成（已写入 ${b.nextChunk * b.chunkSize}/${b.plan.length} 后中断，原编目已恢复）：${b.lastError}`}
+          description="卡片清单与冲突判定均已保留，冲突无需重新选定。"
+          action={
+            <Button
+              size="small"
+              type="primary"
+              onClick={() => {
+                setResumeBatchId(b.id);
+                setMergeOpen(true);
+              }}
+            >
+              从未完成批次继续
+            </Button>
+          }
+        />
+      ))}
+
       <Row gutter={12}>
         {stats.map((s) => (
           <Col span={6} key={s.quality}>
@@ -188,6 +259,15 @@ export default function AssetCatalog() {
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={catalogFromWaypoints}>
             按航点批量编目
+          </Button>
+          <Button
+            icon={<SnippetsOutlined />}
+            onClick={() => {
+              setResumeBatchId(undefined);
+              setMergeOpen(true);
+            }}
+          >
+            接入两卡清单合并
           </Button>
           <Button
             disabled={selected.length === 0}
@@ -260,6 +340,14 @@ export default function AssetCatalog() {
           </Card>
         </Col>
       </Row>
+
+      <CardMergeDrawer
+        open={mergeOpen}
+        missionNo={mission.missionNo}
+        batch={resumeBatchId ? mergeBatches.find((b) => b.id === resumeBatchId) : undefined}
+        onClose={() => setMergeOpen(false)}
+        onExecuted={onMergeExecuted}
+      />
     </Space>
   );
 }

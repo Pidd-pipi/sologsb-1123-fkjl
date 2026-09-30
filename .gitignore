@@ -7,3 +7,6 @@ dist/
 .vscode/
 output/
 test-results/
+
+# 自检脚本的 esbuild 打包产物
+frontend/scripts/*.mjs

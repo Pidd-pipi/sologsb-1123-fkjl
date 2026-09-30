@@ -5,6 +5,7 @@ import { RocketOutlined } from '@ant-design/icons';
 import { useMissionStore } from '../stores/missionStore';
 import { useWaypointStore } from '../stores/waypointStore';
 import { useAssetStore } from '../stores/assetStore';
+import { useMergeStore } from '../stores/mergeStore';
 import { ensureSeedData, markDbVersion, readDbVersion } from '../utils/db';
 import { hasAmapKey } from '../utils/amapLoader';
 import MissionList from '../pages/MissionList';
@@ -87,19 +88,20 @@ export default function AppRouter() {
   const loadMissions = useMissionStore((s) => s.load);
   const loadWaypoints = useWaypointStore((s) => s.load);
   const loadAssets = useAssetStore((s) => s.load);
+  const loadBatches = useMergeStore((s) => s.load);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       await ensureSeedData();
       markDbVersion();
-      await Promise.all([loadMissions(), loadWaypoints(), loadAssets()]);
+      await Promise.all([loadMissions(), loadWaypoints(), loadAssets(), loadBatches()]);
       if (alive) setReady(true);
     })();
     return () => {
       alive = false;
     };
-  }, [loadMissions, loadWaypoints, loadAssets]);
+  }, [loadMissions, loadWaypoints, loadAssets, loadBatches]);
 
   if (!ready) {
     return (

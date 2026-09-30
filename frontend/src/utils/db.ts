@@ -3,10 +3,12 @@ import type { CameraPreset, Mission } from '../types/mission';
 import type { Waypoint } from '../types/waypoint';
 import type { FlightLine } from '../types/flightline';
 import { makeThumbDataUrl, type AssetThumb, type ImageAsset } from '../types/imageasset';
+import type { MergeBatch } from '../types/cardMerge';
+import { buildAssetSnapshot } from './cardMerge';
 import { newId } from './id';
 
 export const DB_NAME = 'gbdronemap';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbdronemap:db-version';
 
 class DroneMapDB extends Dexie {
@@ -16,6 +18,7 @@ class DroneMapDB extends Dexie {
   assets!: Table<ImageAsset, string>;
   thumbs!: Table<AssetThumb, string>;
   presets!: Table<CameraPreset, string>;
+  mergeBatches!: Table<MergeBatch, string>;
 
   constructor() {
     super(DB_NAME);
@@ -54,6 +57,62 @@ class DroneMapDB extends Dexie {
             if (row.updatedAt === undefined) row.updatedAt = Date.now();
             if (row.batteryCount === undefined) row.batteryCount = 1;
           });
+      });
+    // v3：两卡合并 + 成果快照。升级只补齐快照/标记/断链缩略图，
+    // 绝不拿后来改过的相机或航线参数重算任何已收实测值。
+    this.version(3)
+      .stores({
+        missions: 'id, missionNo, areaName, droneModel, flightDate, status, purpose, createdAt',
+        waypoints: 'id, missionId, seq, action, altitude',
+        lines: 'id, missionId, lineNo, updatedAt',
+        assets: 'id, missionId, imageNo, quality, shotAt, mergeBatchId',
+        thumbs: 'id, missionId',
+        presets: 'id, name, cameraModel',
+        mergeBatches: 'id, status, createdAt, updatedAt',
+      })
+      .upgrade(async (tx) => {
+        const missionRows: Mission[] = await tx.table('missions').toCollection().toArray();
+        const lineRows: FlightLine[] = await tx.table('lines').toCollection().toArray();
+        const thumbRows: AssetThumb[] = await tx.table('thumbs').toCollection().toArray();
+        const thumbIds = new Set(thumbRows.map((t) => t.id));
+
+        const thumbsToAdd: AssetThumb[] = [];
+        await tx
+          .table('assets')
+          .toCollection()
+          .modify((row: any) => {
+            if (row.cardNo === undefined) row.cardNo = '';
+            if (!Array.isArray(row.sourceCardNos)) row.sourceCardNos = [];
+            if (row.qualityConfirmed === undefined) {
+              // 旧编目里已经人工打过质量标的，视为已确认质量
+              row.qualityConfirmed = row.quality !== undefined;
+            }
+            if (row.mergeBatchId === undefined) row.mergeBatchId = '';
+            if (row.snapshotFilled === undefined) row.snapshotFilled = false;
+
+            // 补齐成果快照：只用条目中已收的实测值和当前任务/航线参数冻结一份，
+            // 不用相机/航线参数回算 gsd、overlap 等任何实测字段
+            if (!row.snapshotFilled) {
+              const mission = missionRows.find((m) => m.id === row.missionId);
+              const line = lineRows.find((l) => l.missionId === row.missionId) ?? null;
+              if (mission) {
+                row.snapshot = buildAssetSnapshot(row as ImageAsset, mission, line, 'migration-v3');
+                row.snapshotFilled = true;
+              }
+            }
+
+            // 修复断链缩略图：条目存在但 thumbs 表缺失或内容为空时补一张占位图
+            if (!thumbIds.has(row.id) || !thumbRows.find((t) => t.id === row.id)?.dataUrl) {
+              thumbsToAdd.push({
+                id: row.id,
+                missionId: row.missionId,
+                dataUrl: makeThumbDataUrl(row.imageNo, row.quality ?? '合格', Number(row.lng) || 0, Number(row.lat) || 0),
+              });
+            }
+          });
+        if (thumbsToAdd.length > 0) {
+          await tx.table('thumbs').bulkPut(thumbsToAdd);
+        }
       });
   }
 }
@@ -236,14 +295,17 @@ export async function ensureSeedData(): Promise<void> {
   const assets: ImageAsset[] = [];
   const thumbs: AssetThumb[] = [];
   const qualities: ImageAsset['quality'][] = ['合格', '合格', '模糊', '合格', '过曝', '合格'];
+  const lineA = lines[0];
   qualities.forEach((quality, index) => {
     const id = newId('asset');
     const lng = 116.3916 + index * 0.0012;
     const lat = 39.9071 - (index % 2) * 0.0009;
-    assets.push({
+    const asset: ImageAsset = {
       id,
       missionId: missionA,
       imageNo: `IMG_${String(1001 + index)}`,
+      cardNo: '卡A',
+      sourceCardNos: ['卡A'],
       lng,
       lat,
       altitude: 120,
@@ -252,8 +314,15 @@ export async function ensureSeedData(): Promise<void> {
       tiltAngle: 2 + index,
       shotAt: now - 30 * day + index * 12000,
       quality,
+      qualityConfirmed: true,
       folder: `/DM-2024-018/100MEDIA`,
-    });
+      mergeBatchId: '',
+      snapshotFilled: false,
+    };
+    // 入藏即冻结成果快照（示范数据）
+    asset.snapshot = buildAssetSnapshot(asset, missions[0], lineA, 'seed');
+    asset.snapshotFilled = true;
+    assets.push(asset);
     thumbs.push({ id, missionId: missionA, dataUrl: makeThumbDataUrl(`IMG_${1001 + index}`, quality, lng, lat) });
   });
 

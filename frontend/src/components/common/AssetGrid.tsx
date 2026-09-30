@@ -1,6 +1,6 @@
-import { Button, Card, Checkbox, Empty, Space, Tag, Typography } from 'antd';
-import { AimOutlined } from '@ant-design/icons';
-import type { ImageAsset, ImageQuality } from '../../types/imageasset';
+import { Button, Card, Checkbox, Empty, Space, Tag, Tooltip, Typography } from 'antd';
+import { AimOutlined, LinkOutlined } from '@ant-design/icons';
+import { makeThumbDataUrl, type ImageAsset, type ImageQuality } from '../../types/imageasset';
 
 export interface AssetGridProps {
   assets: ImageAsset[];
@@ -68,7 +68,7 @@ export default function AssetGrid({
             >
               <div style={{ position: 'relative' }}>
                 <img
-                  src={thumbs[asset.id]}
+                  src={thumbs[asset.id] ?? makeThumbDataUrl(asset.imageNo, asset.quality, asset.lng, asset.lat)}
                   alt={asset.imageNo}
                   style={{ width: '100%', display: 'block', borderRadius: 4, background: '#eef2f6' }}
                 />
@@ -76,11 +76,23 @@ export default function AssetGrid({
                   <Checkbox checked={selected} onChange={() => onToggle(asset.id)} />
                 </div>
                 <div style={{ position: 'absolute', top: 4, right: 4 }}>
-                  <Tag color={QUALITY_COLOR[asset.quality]}>{asset.quality}</Tag>
+                  <Space size={4}>
+                    {thumbs[asset.id] ? null : (
+                      <Tooltip title="缩略图断链，合并时将自动补建">
+                        <Tag icon={<LinkOutlined />} color="orange">断链</Tag>
+                      </Tooltip>
+                    )}
+                    <Tag color={QUALITY_COLOR[asset.quality]}>{asset.quality}</Tag>
+                  </Space>
                 </div>
               </div>
               <Typography.Text strong style={{ display: 'block', marginTop: 6 }}>
                 {asset.imageNo}
+                {asset.qualityConfirmed ? (
+                  <Tooltip title="质量已内业确认，两卡合并不覆盖">
+                    <Tag color="green" style={{ marginLeft: 6 }}>质量已确认</Tag>
+                  </Tooltip>
+                ) : null}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                 GSD {asset.gsd} cm/px · 重叠 {asset.overlap}% · 倾角 {asset.tiltAngle}°
@@ -88,6 +100,14 @@ export default function AssetGrid({
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                 航高 {asset.altitude} m · {new Date(asset.shotAt).toLocaleString('zh-CN')}
               </Typography.Text>
+              <Space size={4} wrap style={{ marginTop: 2 }}>
+                {asset.sourceCardNos.length > 0 ? (
+                  <Tooltip title="外业卡片临时编号，仅作溯源，不作为影像身份">
+                    <Tag>卡：{Array.from(new Set([...asset.sourceCardNos, asset.cardNo].filter(Boolean))).join('/')}</Tag>
+                  </Tooltip>
+                ) : null}
+                {asset.snapshotFilled ? <Tag color="geekblue">快照已冻结</Tag> : <Tag color="orange">缺快照</Tag>}
+              </Space>
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }} ellipsis>
                 {asset.folder}
               </Typography.Text>

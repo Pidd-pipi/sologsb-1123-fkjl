@@ -31,7 +31,15 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     set({ items: rows, thumbs, loaded: true });
   },
   async addMany(drafts) {
-    const records: ImageAsset[] = drafts.map((d) => ({ ...d, id: newId('asset') }));
+    const records: ImageAsset[] = drafts.map((d) => ({
+      cardNo: '',
+      sourceCardNos: [],
+      qualityConfirmed: false,
+      mergeBatchId: '',
+      snapshotFilled: false,
+      ...d,
+      id: newId('asset'),
+    }));
     const thumbRecords: AssetThumb[] = records.map((r) => ({
       id: r.id,
       missionId: r.missionId,
@@ -53,9 +61,12 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   },
   async markMany(ids, quality) {
     for (const id of ids) {
-      await db.assets.update(id, { quality });
+      // 内业人工标记质量即视为已确认，两卡合并时该结论保留
+      await db.assets.update(id, { quality, qualityConfirmed: true });
     }
-    set({ items: get().items.map((it) => (ids.includes(it.id) ? { ...it, quality } : it)) });
+    set({
+      items: get().items.map((it) => (ids.includes(it.id) ? { ...it, quality, qualityConfirmed: true } : it)),
+    });
   },
   async removeMany(ids) {
     await db.assets.bulkDelete(ids);
